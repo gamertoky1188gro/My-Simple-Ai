@@ -101,4 +101,4 @@ This project is licensed under the MIT License.
 
 ---
 
-**Contact Information**: If you have any questions or suggestions, reach out at [Contact Us](mailto:gamertoky1188@example.com).
+**Contact Information**: If you have any questions or suggestions, reach out at [Contact Us](mailto:tokyintelligentgamer@gmail.com).
