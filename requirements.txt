@@ -1,0 +1,11 @@
+transformers
+tf-keras
+tensorflow
+keras
+datasets
+gym
+numpy
+pandas
+matplotlib
+scikit-learn
+torch
