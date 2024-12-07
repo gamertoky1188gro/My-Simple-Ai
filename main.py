@@ -1,5 +1,36 @@
 from transformers import pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
+from difflib import get_close_matches
 import json
+import requests
+
+
+def search_internet_with_custom_search(question):
+    """
+    Search the internet using Google's Custom Search JSON API.
+    """
+    api_key = "AIzaSyBlREWzWan1HTPXCJACm-2ofK0UT3ggt_Q"  # Replace with your actual API Key
+    search_engine_id = "c114e1dee659c4825"  # Replace with your actual Search Engine ID (cx)
+    url = "https://www.googleapis.com/customsearch/v1"
+
+    params = {
+        "key": api_key,
+        "cx": search_engine_id,
+        "q": question,
+        "num": 1,  # Fetch only the top result
+    }
+
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        results = response.json()
+
+        if "items" in results:
+            answer = results["items"][0].get("snippet", "No relevant result found.")
+            return answer
+        else:
+            return "I couldn't find any relevant information on the internet."
+    except requests.exceptions.RequestException as e:
+        return f"An error occurred: {str(e)}"
 
 
 # ========== Component 1: Question Answering ========== #
@@ -9,22 +40,34 @@ qa_model = pipeline("question-answering", model="bert-large-uncased-whole-word-m
 
 def answer_question(question, context, knowledge_base):
     """
-    Answer questions based on a given context and save the answer to the knowledge base.
+    Answer questions based on a given context, knowledge base, or the internet.
     """
-    response = qa_model({"question": question, "context": context})
-    answer = response.get("answer", "I couldn't find an answer.")
+    questions = [q.strip() for q in question.split("and")]
+    answers = {}
 
-    # Check if the answer can be saved as a fact
-    if answer != "I couldn't find an answer.":
-        knowledge_base[question] = answer
-        save_knowledge(knowledge_base)  # Save the updated knowledge base
+    for q in questions:
+        if q in knowledge_base:
+            answers[q] = knowledge_base[q]
+        elif context.strip():
+            try:
+                response = qa_model(question=q, context=context)
+                answer = response.get("answer", "I couldn't find an answer.")
+                if answer != "I couldn't find an answer.":
+                    knowledge_base[q] = answer
+                    save_knowledge(knowledge_base)
+                answers[q] = answer
+            except Exception as e:
+                answers[q] = f"Error processing question: {str(e)}"
+        else:
+            internet_answer = search_internet_with_custom_search(q)
+            answers[q] = internet_answer
 
-    return answer
+    return answers
 
 
 # ========== Component 2: Grammar Correction ========== #
 print("Loading Grammar Correction model...")
-grammar_model_name = "t5-large"  # Lightweight grammar correction model
+grammar_model_name = "vennify/t5-base-grammar-correction"
 grammar_tokenizer = AutoTokenizer.from_pretrained(grammar_model_name)
 grammar_model = AutoModelForSeq2SeqLM.from_pretrained(grammar_model_name)
 
@@ -33,11 +76,19 @@ def fix_grammar(sentence):
     """
     Fix grammatical errors in a sentence.
     """
-    input_text = f"fix grammar: {sentence}"
-    inputs = grammar_tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
-    outputs = grammar_model.generate(inputs, max_length=512, num_beams=4, early_stopping=True)
-    corrected_sentence = grammar_tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return corrected_sentence
+    try:
+        input_text = f"fix grammatical errors: {sentence}"
+        inputs = grammar_tokenizer.encode(input_text, return_tensors="pt", max_length=512, truncation=True)
+        outputs = grammar_model.generate(inputs, max_length=512, num_beams=4, early_stopping=True)
+        corrected_sentence = grammar_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+        print("Debug: Raw Output:", grammar_tokenizer.decode(outputs[0]))
+
+        if corrected_sentence.lower() == input_text.lower():
+            return "The grammar model returned unexpected results. Please verify the model."
+        return corrected_sentence
+    except Exception as e:
+        return f"Error during grammar correction: {str(e)}"
 
 
 # ========== Component 3: Knowledge Learning ========== #
@@ -71,9 +122,17 @@ def learn_fact(key, value, knowledge_base):
 
 def retrieve_fact(key, knowledge_base):
     """
-    Retrieve a learned fact.
+    Retrieve a learned fact with support for approximate matching.
     """
-    return knowledge_base.get(key, "I don't know that yet.")
+    if key in knowledge_base:
+        return knowledge_base[key]
+
+    close_matches = get_close_matches(key, knowledge_base.keys(), n=1, cutoff=0.6)
+    if close_matches:
+        closest_key = close_matches[0]
+        return f"Did you mean '{closest_key}'? {knowledge_base[closest_key]}"
+
+    return "I don't know that yet."
 
 
 # ========== Main AI Interaction ========== #
@@ -82,7 +141,7 @@ def main():
     print("I can answer questions, fix grammar, and learn new things from you.")
     print("Type 'exit' to quit.")
 
-    knowledge_base = load_knowledge()  # Load existing knowledge base
+    knowledge_base = load_knowledge()
 
     while True:
         print("\nWhat would you like to do?")
@@ -97,14 +156,37 @@ def main():
             break
 
         if choice == "1":
-            context = input("Provide some context: ").strip()
+            context = input("Provide some context (or leave blank to search online): ").strip()
             question = input("What is your question? ").strip()
 
-            # Check if the answer is already in the knowledge base
-            if question in knowledge_base:
-                print("Answer:", knowledge_base[question])
-            else:
-                print("Answer:", answer_question(question, context, knowledge_base))
+            questions = [q.strip() for q in question.split("and")]
+            answers_to_display = {}
+
+            for q in questions:
+                if q in knowledge_base:
+                    answers_to_display[q] = knowledge_base[q]
+                elif context.strip():
+                    try:
+                        response = qa_model(question=q, context=context)
+                        answer = response.get("answer", "I couldn't find an answer.")
+
+                        if answer != "I couldn't find an answer.":
+                            knowledge_base[q] = {"answer": answer, "context": context}
+                            save_knowledge(knowledge_base)
+
+                        answers_to_display[q] = answer
+                    except Exception as e:
+                        answers_to_display[q] = f"Error processing question: {str(e)}"
+                else:
+                    internet_answer = search_internet_with_custom_search(q)
+
+                    knowledge_base[q] = {"answer": internet_answer, "context": "Searched online"}
+                    save_knowledge(knowledge_base)
+
+                    answers_to_display[q] = internet_answer
+
+            for q, a in answers_to_display.items():
+                print(f"Q: {q}\nA: {a}\n")
 
         elif choice == "2":
             sentence = input("Enter a sentence to fix: ").strip()
